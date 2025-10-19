@@ -70,3 +70,28 @@ def axisquat(axis: str, theta: float) -> Quat:
         return np.array([c, 0.0, 0.0, s], dtype=float)
     else:
         raise ValueError("axisquat error: axis must be 'x', 'y', or 'z'")
+    
+def cart2sph(v: Vec3):
+    """
+    Convert Cartesian coordinates to spherical coordinates.
+
+    MATLAB-style definition:
+      azimuth   = atan2(y, x)
+      elevation = atan2(z, sqrt(x^2 + y^2))
+      r         = sqrt(x^2 + y^2 + z^2)
+
+    Args:
+        v: 3D Cartesian vector [x, y, z]
+
+    Returns:
+        azimuth (float), elevation (float), radius (float)
+    """
+    x, y, z = v[0], v[1], v[2]
+    r_xy = np.sqrt(x**2 + y**2)
+    r = np.sqrt(x**2 + y**2 + z**2)
+
+    az = np.arctan2(y, x)
+    el = np.arctan2(z, r_xy)
+
+    return az, el, r
+

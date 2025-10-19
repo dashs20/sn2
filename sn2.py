@@ -8,7 +8,7 @@ G = 6.67e-11
 
 """ ~~~ INIT PYGAME ~~~ """
 pygame.init()
-screen = pygame.display.set_mode((800, 800))
+screen = pygame.display.set_mode((1200, 800))
 pygame.display.set_caption("sn2")
 font = pygame.font.SysFont("consolas", 18)
 
@@ -109,10 +109,9 @@ z_axis = grafix_line(
     r2_g2p_g=np.array([0, 0, 0]),
     color=pygame.Color("cyan"),
 )
-torque_mag = 1200.0  # Nm, adjust as needed
-engine_max = 500000  # N
-eng_increment = engine_max / 100
-throttle = 0
+torque_mag = 3000.0  # Nm, adjust as needed
+engine_max = 500000000  # N
+throttle_pct = 0
 
 """camera"""
 cam = grafix_camera(r_g2c_g=spaceship_fiz.r_g2p_g, q_g2c=spaceship_fiz.q_g2b, fovDeg=40)
@@ -160,6 +159,40 @@ def draw_text(surface, text, x, y, color=(0, 255, 0)):
     surface.blit(img, (x, y))
 
 
+# plume
+def plume(
+    throttle_pct: float,
+    r_b2r_b: Vec3,  # vector from body origin to plume rotation point expressed in body coords.
+    plume_length: float,
+    jitter_factor: float,
+    q_g2b: Quat,
+    q_b2p: Quat,
+    r_g2b_g: Vec3,  # vector from global origin to body origin expressed in global coords.
+):
+    # calculate jitter modifier
+    flame_jitter = (np.random.rand() - 0.5) * throttle_pct * jitter_factor
+    plume_height = throttle_pct * plume_length + flame_jitter
+
+    # transform rotation point 2 plume origin into global frame.
+    r_r2p_p = np.array([0, 0, plume_height / 2])
+    r_r2p_g = quatrotate(quatinv(quatmultiply(q_g2b, q_b2p)), r_r2p_p)
+
+    # get plume rotation point position in global frame
+    r_b2r_g = quatrotate(quatinv(q_g2b), r_b2r_b)
+
+    # add them all up
+    r_g2p_g = r_g2b_g + r_b2r_g + r_r2p_g
+
+    # create plume grafix object
+    grafix_tri_prism(
+        r_g2p_g=r_g2p_g,
+        side=plume_length/10,
+        height=plume_height,
+        color=pygame.Color("orange"),
+        q_g2b=quatmultiply(q_g2b, q_b2p),
+    ).draw(cam, screen)
+
+
 """ ~~~ MAIN GAME LOOP ~~~ """
 clock = pygame.time.Clock()
 t = 0.0
@@ -183,28 +216,28 @@ while running:
     # step 2) get user inputs to get spacecraft engine and attitude thrusters
     keys = pygame.key.get_pressed()
     # 2a) attitude
-    moment_b = np.array([0.0, 0.0, 0.0])
+    cmd_moment_b = np.array([0.0, 0.0, 0.0])
     if keys[pygame.K_w]:
-        moment_b[0] = torque_mag
+        cmd_moment_b[0] = torque_mag
     if keys[pygame.K_s]:
-        moment_b[0] = -torque_mag
+        cmd_moment_b[0] = -torque_mag
     if keys[pygame.K_a]:
-        moment_b[1] = -torque_mag
+        cmd_moment_b[1] = -torque_mag
     if keys[pygame.K_d]:
-        moment_b[1] = torque_mag
+        cmd_moment_b[1] = torque_mag
     if keys[pygame.K_q]:
-        moment_b[2] = torque_mag
+        cmd_moment_b[2] = torque_mag
     if keys[pygame.K_e]:
-        moment_b[2] = -torque_mag
-    spaceship_fiz.momen_b = moment_b
+        cmd_moment_b[2] = -torque_mag
+    spaceship_fiz.momen_b = cmd_moment_b
     # 2b) engine
     force_b = np.array([0.0, 0.0, 0.0])
     if keys[pygame.K_LSHIFT]:
-        throttle += eng_increment
+        throttle_pct += 1 / 100
     if keys[pygame.K_LCTRL]:
-        throttle -= eng_increment
-    throttle = np.clip(throttle, 0, engine_max)
-    force_b[2] = throttle
+        throttle_pct -= 1 / 100
+    throttle_pct = np.clip(throttle_pct, 0, 1)
+    force_b[2] = throttle_pct * engine_max
     spaceship_fiz.force_b = force_b
 
     # step 3) integrate
@@ -252,22 +285,95 @@ while running:
 
     # step 5) draw thrusts
     # 5a) main engine thrust
-    if throttle > 0:
-        # throttle jitter so it looks SICK
-        flame_jitter = (np.random.rand()-0.5)*throttle/engine_max*2
-        # position of plume
-        r_b2t_b = np.array([0, 0.5, -3-5 / engine_max * throttle - flame_jitter/2])
-        r_b2t_g = quatrotate(quatinv(spaceship_fiz.q_g2b), r_b2t_b)
-        r_g2t_g = r_b2t_g + spaceship_fiz.r_g2p_g
-        # orientation of plume
-        q_g2b_plume = quatmultiply(spaceship_fiz.q_g2b,axisquat('y',np.deg2rad(180)))
-        grafix_tri_prism(
-            r_g2p_g=r_g2t_g,
-            side=1,
-            height=10 / engine_max * throttle + flame_jitter,
-            color=pygame.Color("orange"),
-            q_g2b=q_g2b_plume
-        ).draw(cam,screen)
+    if throttle_pct > 0:
+        plume(
+            throttle_pct=throttle_pct,
+            r_b2r_b=np.array([0, 0.5, -3]),
+            plume_length=10,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(180)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+    # moments
+    if cmd_moment_b[0] > 0:
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([0, -0.8, -2.5]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("x", np.deg2rad(90)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+    if cmd_moment_b[0] < 0:
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([0, 1.75, -3]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("x", np.deg2rad(270)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+    if cmd_moment_b[1] < 0:
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([0, 0, 2.5]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(90)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+    if cmd_moment_b[1] > 0:
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([0, 0, 2.5]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(270)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+    if cmd_moment_b[2] > 0:
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([1.5, 1.75, -3]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(90)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([0, -0.8, -3]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(270)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+    if cmd_moment_b[2] < 0:
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([-1.5, 1.75, -3]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(270)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
+        plume(
+            throttle_pct=1,
+            r_b2r_b=np.array([0, -0.8, -3]),
+            plume_length=1,
+            jitter_factor=1,
+            q_g2b=spaceship_fiz.q_g2b,
+            q_b2p=axisquat("y", np.deg2rad(90)),
+            r_g2b_g=spaceship_fiz.r_g2p_g,
+        )
 
     # step 6) ship HUD
     sx, sy = 10, 10
@@ -309,29 +415,29 @@ while running:
 
     # step 7) draw ship triad
     # 7a) get the vectors in global coordinates
-    x_body_g = (
-        quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([1, 0, 0]))
-        + spaceship_fiz.r_g2p_g
-    )
-    y_body_g = (
-        quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([0, 1, 0]))
-        + spaceship_fiz.r_g2p_g
-    )
-    z_body_g = (
-        quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([0, 0, 1]))
-        + spaceship_fiz.r_g2p_g
-    )
-    # 7b) set and draw
-    x_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
-    x_axis.r1_g2p_g = x_body_g
-    x_axis.draw(cam, screen)
+    # x_body_g = (
+    #     quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([1, 0, 0]))
+    #     + spaceship_fiz.r_g2p_g
+    # )
+    # y_body_g = (
+    #     quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([0, 1, 0]))
+    #     + spaceship_fiz.r_g2p_g
+    # )
+    # z_body_g = (
+    #     quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([0, 0, 1]))
+    #     + spaceship_fiz.r_g2p_g
+    # )
+    # # 7b) set and draw
+    # x_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
+    # x_axis.r1_g2p_g = x_body_g
+    # x_axis.draw(cam, screen)
 
-    y_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
-    y_axis.r1_g2p_g = y_body_g
-    y_axis.draw(cam, screen)
-    z_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
-    z_axis.r1_g2p_g = z_body_g
-    z_axis.draw(cam, screen)
+    # y_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
+    # y_axis.r1_g2p_g = y_body_g
+    # y_axis.draw(cam, screen)
+    # z_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
+    # z_axis.r1_g2p_g = z_body_g
+    # z_axis.draw(cam, screen)
 
     # step 8) update the display
     pygame.display.flip()
