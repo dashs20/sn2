@@ -67,7 +67,7 @@ moon_fiz = fizix_thing(
 )
 # graphics object
 moon_graf = grafix_sphere(
-    r_g2p_g=moon_fiz.r_g2p_g, radius=1737447.78 * 4, color=pygame.Color("gray")
+    r_g2p_g=moon_fiz.r_g2p_g, radius=1737447.78, color=pygame.Color("gray")
 )
 
 """spaceship"""
@@ -110,7 +110,9 @@ z_axis = grafix_line(
     color=pygame.Color("cyan"),
 )
 torque_mag = 1200.0  # Nm, adjust as needed
-engine_mag = 10000.0  # N
+engine_max = 500000  # N
+eng_increment = engine_max / 100
+throttle = 0
 
 """camera"""
 cam = grafix_camera(r_g2c_g=spaceship_fiz.r_g2p_g, q_g2c=spaceship_fiz.q_g2b, fovDeg=40)
@@ -171,7 +173,7 @@ while running:
     screen.fill((0, 0, 20))
     t += dt_g
 
-    '''A: physics'''
+    """A: physics"""
     # step 1) apply gravity to everything
     tmp = apply_grav([earth_fiz, moon_fiz, spaceship_fiz])
     earth_fiz = tmp[0]
@@ -198,7 +200,11 @@ while running:
     # 2b) engine
     force_b = np.array([0.0, 0.0, 0.0])
     if keys[pygame.K_LSHIFT]:
-        force_b[2] = engine_mag
+        throttle += eng_increment
+    if keys[pygame.K_LCTRL]:
+        throttle -= eng_increment
+    throttle = np.clip(throttle, 0, engine_max)
+    force_b[2] = throttle
     spaceship_fiz.force_b = force_b
 
     # step 3) integrate
@@ -206,7 +212,7 @@ while running:
     moon_fiz.step()
     spaceship_fiz.step()
 
-    '''B: graphics'''
+    """B: graphics"""
     # step 1) update ship and planet graphics objects
     earth_graf.update_state(earth_fiz.r_g2p_g, earth_fiz.q_g2b)
     moon_graf.update_state(moon_fiz.r_g2p_g, moon_fiz.q_g2b)
@@ -244,7 +250,26 @@ while running:
     earth_graf.draw(cam, screen)
     spaceship_graf.draw(cam, screen)
 
-    # step 5) ship HUD
+    # step 5) draw thrusts
+    # 5a) main engine thrust
+    if throttle > 0:
+        # throttle jitter so it looks SICK
+        flame_jitter = (np.random.rand()-0.5)*throttle/engine_max*2
+        # position of plume
+        r_b2t_b = np.array([0, 0.5, -3-5 / engine_max * throttle - flame_jitter/2])
+        r_b2t_g = quatrotate(quatinv(spaceship_fiz.q_g2b), r_b2t_b)
+        r_g2t_g = r_b2t_g + spaceship_fiz.r_g2p_g
+        # orientation of plume
+        q_g2b_plume = quatmultiply(spaceship_fiz.q_g2b,axisquat('y',np.deg2rad(180)))
+        grafix_tri_prism(
+            r_g2p_g=r_g2t_g,
+            side=1,
+            height=10 / engine_max * throttle + flame_jitter,
+            color=pygame.Color("orange"),
+            q_g2b=q_g2b_plume
+        ).draw(cam,screen)
+
+    # step 6) ship HUD
     sx, sy = 10, 10
     line = 18
     # Spaceship state
@@ -282,8 +307,8 @@ while running:
         (0, 255, 0),
     )
 
-    # step 6) draw ship triad
-    # 6a) get the vectors in global coordinates
+    # step 7) draw ship triad
+    # 7a) get the vectors in global coordinates
     x_body_g = (
         quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([1, 0, 0]))
         + spaceship_fiz.r_g2p_g
@@ -296,7 +321,7 @@ while running:
         quatrotate(quatinv(spaceship_fiz.q_g2b), np.array([0, 0, 1]))
         + spaceship_fiz.r_g2p_g
     )
-    # 6b) set and draw
+    # 7b) set and draw
     x_axis.r2_g2p_g = spaceship_fiz.r_g2p_g
     x_axis.r1_g2p_g = x_body_g
     x_axis.draw(cam, screen)
@@ -308,7 +333,7 @@ while running:
     z_axis.r1_g2p_g = z_body_g
     z_axis.draw(cam, screen)
 
-    # step 7) update the display
+    # step 8) update the display
     pygame.display.flip()
     clock.tick(120)
 
