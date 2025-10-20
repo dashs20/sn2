@@ -10,3 +10,5 @@ controls are:
 - shift = increase throttle
 - ctrl = decrease throttle
 - wasdqe = control RCS
+
+<img width="1492" height="997" alt="image" src="https://github.com/user-attachments/assets/75ba767c-28b2-4554-80d1-079f4bfdd41c" />
