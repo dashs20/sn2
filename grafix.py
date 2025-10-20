@@ -48,7 +48,6 @@ class grafix_sphere:
 
     def update_state(self, r_g2p_g: Vec3, q_g2b: Quat):
         self.r_g2p_g = r_g2p_g
-        self.q_g2b = q_g2b
 
     def draw(self, camera: "grafix_camera", screen: pygame.Surface):
         # 1) get position & scale factor in pygame coordinates

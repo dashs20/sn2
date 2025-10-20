@@ -2,6 +2,7 @@ from typing import Annotated
 from numpy.typing import NDArray
 import numpy as np
 from mafs import *
+from typing import List
 
 M3x3 = Annotated[NDArray[np.float64], (3, 3)]
 
@@ -70,3 +71,36 @@ class fizix_thing:
         # 4) Euler's method, integrate quat
         self.q_g2b = self.q_g2b + q_g2b_dot * self.dt
         self.q_g2b = self.q_g2b / np.linalg.norm(self.q_g2b)
+
+"""
+Helpers
+"""
+# Given a list of fisix things, figure out how they all affect each other and update their forces
+def apply_grav(things: List[fizix_thing], G: float):
+    n_things = len(things)
+    for cur_thing in range(n_things):
+        # get the gravity force of everything on you and sum it all up.
+        f_grav_g_net = np.array([0, 0, 0])
+        for other_thing in range(n_things):
+            # don't calculate gravity wrt. yourself!
+            if cur_thing != other_thing:
+                # get some vectors
+                r_cur2other = things[other_thing].r_g2p_g - things[cur_thing].r_g2p_g
+                r_cur2other_mag = np.linalg.norm(r_cur2other)
+                r_cur2other_hat = r_cur2other / r_cur2other_mag
+
+                # calculate force magnitude
+                f_mag = (
+                    G
+                    * (things[cur_thing].M * things[other_thing].M)
+                    / r_cur2other_mag**2
+                )
+                f_vec_g = f_mag * r_cur2other_hat
+
+                # add up
+                f_grav_g_net = f_grav_g_net + f_vec_g
+        # rotate force into body frame, and remember it.
+        f_grav_b_net = quatrotate(things[cur_thing].q_g2b, f_grav_g_net)
+        things[cur_thing].update_forces(f_grav_b_net, np.array([0, 0, 0]))
+
+    return things

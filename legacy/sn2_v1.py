@@ -67,7 +67,7 @@ moon_fiz = fizix_thing(
 )
 # graphics object
 moon_graf = grafix_sphere(
-    r_g2p_g=moon_fiz.r_g2p_g, radius=1737447.78, color=pygame.Color("gray")
+    r_g2p_g=moon_fiz.r_g2p_g, radius=1737447.78, color=pygame.Color("pink")
 )
 
 """spaceship"""
