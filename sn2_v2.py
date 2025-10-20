@@ -10,14 +10,39 @@ G = 6.67e-11
 
 # init pygame
 pygame.init()
-screen = pygame.display.set_mode((1200, 800))
+screen_x = 1200
+screen_y = 800
+screen = pygame.display.set_mode((screen_x, screen_y))
 pygame.display.set_caption("sn2")
+font = pygame.font.SysFont("consolas", 18)
+
+# draw text
+def draw_text(surface, text, x, y, color=(0, 255, 0)):
+    img = font.render(text, True, color)
+    surface.blit(img, (x, y))
+
+# debug triad
+x_axis = grafix_line(
+    r1_g2p_g=np.array([0, 0, 0]),
+    r2_g2p_g=np.array([0, 0, 0]),
+    color=pygame.Color("red"),
+)
+y_axis = grafix_line(
+    r1_g2p_g=np.array([0, 0, 0]),
+    r2_g2p_g=np.array([0, 0, 0]),
+    color=pygame.Color("green"),
+)
+z_axis = grafix_line(
+    r1_g2p_g=np.array([0, 0, 0]),
+    r2_g2p_g=np.array([0, 0, 0]),
+    color=pygame.Color("cyan"),
+)
 
 # make planets, ship, stars
 planets = import_planets("planets.yaml", dt_g)
 ship = import_ship("ship.yaml", dt_g)
 throttle_pct = 0
-stars = make_stars(1000, 4e8)
+stars = make_stars(1000, 4e9)
 
 # define camera
 cam = grafix_camera(
@@ -138,6 +163,70 @@ while running:
 
     # draw ship
     ship.graf.draw(cam,screen)
+    ship.draw_thrusts(cam,screen)
+
+    # debug triad
+    x_body_g = (
+        quatrotate(quatinv(ship.fiz.q_g2b), np.array([1, 0, 0]))
+        + ship.fiz.r_g2p_g
+    )
+    y_body_g = (
+        quatrotate(quatinv(ship.fiz.q_g2b), np.array([0, 1, 0]))
+        + ship.fiz.r_g2p_g
+    )
+    z_body_g = (
+        quatrotate(quatinv(ship.fiz.q_g2b), np.array([0, 0, 1]))
+        + ship.fiz.r_g2p_g
+    )
+    x_axis.r2_g2p_g = ship.fiz.r_g2p_g
+    x_axis.r1_g2p_g = x_body_g
+    x_axis.draw(cam, screen)
+    y_axis.r2_g2p_g = ship.fiz.r_g2p_g
+    y_axis.r1_g2p_g = y_body_g
+    y_axis.draw(cam, screen)
+    z_axis.r2_g2p_g = ship.fiz.r_g2p_g
+    z_axis.r1_g2p_g = z_body_g
+    z_axis.draw(cam, screen)
+
+    # text
+    sx, sy = 10, 10
+    line = 18
+    # Spaceship state
+    offset = 0
+    draw_text(screen, "SHIP:", sx, sy + offset + line * 0, (0, 255, 0))
+    draw_text(
+        screen,
+        f"pos  = {ship.fiz.r_g2p_g}",
+        sx,
+        sy + offset + line * 1,
+        (0, 255, 0),
+    )
+    draw_text(
+        screen,
+        f"vel  = {ship.fiz.v_g2p_g}",
+        sx,
+        sy + offset + line * 2,
+        (0, 255, 0),
+    )
+    draw_text(
+        screen,
+        f"acc  = {ship.fiz.a_g2p_g}",
+        sx,
+        sy + offset + line * 3,
+        (0, 255, 0),
+    )
+    draw_text(
+        screen, f"quat = {ship.fiz.q_g2b}", sx, sy + offset + line * 4, (0, 255, 0)
+    )
+    draw_text(
+        screen,
+        f"ome  = {ship.fiz.ome_g2b}",
+        sx,
+        sy + offset + line * 5,
+        (0, 255, 0),
+    )
+
+    orbit_hud((screen_x-260,screen_y-260),ship,planets[0],G,screen)
 
     # LAST
     pygame.display.flip()

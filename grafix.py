@@ -128,18 +128,16 @@ class grafix_tri_prism:
 
     def draw(self, camera: "grafix_camera", screen: pygame.Surface):
         # base triangle math
+        # Clean symmetric prism geometry (local body frame)
+        # Centered at origin, tip along +Z
         a = self.side
-        h_base = np.sqrt(3) / 2 * a  # height of equilateral triangle
-
-        # vertices in body frame, centered halfway up for clean rotation
-        verts_b = np.array(
-            [
-                [0, -h_base / 3, -self.height / 2],  # base vertex 1
-                [-a / 2, h_base * 2 / 3, -self.height / 2],  # base vertex 2
-                [+a / 2, h_base * 2 / 3, -self.height / 2],  # base vertex 3
-                [0, 0, +self.height / 2],  # tip vertex
-            ]
-        )
+        h_base = np.sqrt(3) / 2 * a  # equilateral triangle height
+        verts_b = np.array([
+            [-a/2, -h_base/3, -self.height/2],  # base left
+            [ a/2, -h_base/3, -self.height/2],  # base right
+            [ 0.0,  2*h_base/3, -self.height/2], # base top
+            [ 0.0,  0.0,         self.height/2]  # tip (centered)
+        ])
 
         # rotate and translate
         q_b2g = quatinv(self.q_g2b)

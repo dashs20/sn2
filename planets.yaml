@@ -13,6 +13,7 @@ earth:
     r_g2p_g: [0,0,0]
     radius: 6371000
     color: [43,61,217]
+  name: Earth
 
 moon:
   fiz:
@@ -29,3 +30,4 @@ moon:
     r_g2p_g: [384472282, 0, 0]
     radius: 1737447
     color: [255,248,194]
+  name: Moon

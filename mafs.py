@@ -95,3 +95,39 @@ def cart2sph(v: Vec3):
 
     return az, el, r
 
+import numpy as np
+
+def quat_from_to(v_from: Vec3, v_to: Vec3):
+    """
+    Shortest-arc quaternion that rotates v_from to v_to.
+    Returns [w, x, y, z] (scalar first). Both vectors in same frame.
+    """
+    a = np.asarray(v_from, float)
+    b = np.asarray(v_to,   float)
+
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+
+    dot = np.dot(a, b)
+
+    # If vectors are nearly opposite: pick a stable orthogonal axis
+    if dot < -0.999999:
+        # Choose the axis least aligned with 'a' to build an orthogonal
+        ax = np.abs(a)
+        if ax[0] <= ax[1] and ax[0] <= ax[2]:
+            ortho = np.array([1.0, 0.0, 0.0])
+        elif ax[1] <= ax[0] and ax[1] <= ax[2]:
+            ortho = np.array([0.0, 1.0, 0.0])
+        else:
+            ortho = np.array([0.0, 0.0, 1.0])
+        axis = np.cross(a, ortho)
+        axis /= np.linalg.norm(axis)
+        # 180 deg rotation about 'axis' -> w=0
+        return np.array([0.0, axis[0], axis[1], axis[2]])
+
+    # General case
+    axis = np.cross(a, b)
+    w = 1.0 + dot
+    q = np.array([w, axis[0], axis[1], axis[2]])
+    q /= np.linalg.norm(q)
+    return q
