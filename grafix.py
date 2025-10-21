@@ -35,7 +35,7 @@ class grafix_line:
         tmp2 = point_g2pg(camera, screen, self.r2_g2p_g)
         r2_pg = tmp2[0]
         # 2) draw the pygame line
-        if tmp1[2] & tmp2[2]:
+        if tmp1[2] and tmp2[2]:
             pygame.draw.line(screen, self.color, r1_pg, r2_pg)
 
 
@@ -167,23 +167,31 @@ def point_g2pg(camera: "grafix_camera", screen: pygame.Surface, r_g2p_g: Vec3):
     r_c2p_g = r_g2p_g - camera.r_g2c_g
     # 2) rotate into camera frame
     r_c2p_c = quatrotate(camera.q_g2c, r_c2p_g)
-    # ---- SAFETY: must be in front of camera ----
-    if r_c2p_c[2] <= 0:
-        return [(0, 0), 0, 0]  # invisible safely
+
+    # ---- SAFETY: camera looks along -Z; points in front have z < 0 ----
+    if r_c2p_c[2] >= 0:     # <- flipped sign
+        return [(0, 0), 0, 0]
+
     # 3) get screen info
     screen_x, screen_y = screen.get_size()
-    # 4) perspective divide
-    fov_w = r_c2p_c[2] * 2 * np.tan(np.deg2rad(camera.fovDeg) / 2)
-    if abs(fov_w) < 1e-9:  # avoid divide by zero
+
+    # 4) perspective divide (use positive depth = -z)
+    depth = -r_c2p_c[2]     # <- new
+    fov_w = depth * 2 * np.tan(np.deg2rad(camera.fovDeg) / 2)
+    if depth <= 0 or fov_w < 1e-9:
         return [(0, 0), 0, 0]
+
     sf = screen_x / fov_w
     if not np.isfinite(sf):
         return [(0, 0), 0, 0]
+
     # 5) scale projected coords
     r_scaled = sf * r_c2p_c
-    # 6) to pygame coords
+
+    # 6) to pygame coords (x right, y down)
     x_pg = r_scaled[0] + screen_x / 2
     y_pg = -r_scaled[1] + screen_y / 2
     if np.abs(x_pg) > screen_x * 100 or np.abs(y_pg) > screen_y * 100:
         return [(0, 0), 0, 0]
+
     return [(int(x_pg), int(y_pg)), sf, 1]
