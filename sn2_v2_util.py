@@ -355,10 +355,11 @@ def keplerian(ship: sn2_spaceship, planet: sn2_planet, G: float):
     E = np.cross(V, H) / mu - r_hat  # eccentricity vector
     epsilon = v**2 / 2 - mu / r      # specific orbital energy
 
-    # calculate parameters of interest
-    e = np.linalg.norm(E)            # eccentricity
-    i_rad = np.arccos(H[2] / h)      # inclination
+    # orbital elements
+    e = np.linalg.norm(E)                          # eccentricity
+    i_rad = np.arccos(H[2] / h)                    # inclination
     a = -mu / (2 * epsilon) if epsilon != 0 else np.inf  # semi-major axis
+    b = a * np.sqrt(1 - e**2) if e < 1 else np.nan       # semiminor axis
 
     # periapsis & apoapsis
     if e < 1:
@@ -366,12 +367,19 @@ def keplerian(ship: sn2_spaceship, planet: sn2_planet, G: float):
         ra = a * (1 + e)
     else:
         rp = a * (1 - e)
-        ra = np.inf  # hyperbolic or parabolic → no apoapsis
+        ra = np.inf
+
+    # true anomaly (ν)
+    # dot(E,R) = e*r*cos(nu)
+    cos_nu = np.dot(E, R) / (e * r)
+    sin_nu = np.dot(R, V) / (e * h)  # <-- FIX
+    nu = np.arctan2(sin_nu, cos_nu)
+
 
     c3 = 2 * epsilon                 # characteristic energy
     alt = r - planet.graf.radius     # altitude
 
-    return [e, i_rad, rp, ra, c3, v, alt]
+    return [e, i_rad, rp, ra, c3, v, alt, a, b, nu]
 
 
 def hud(
@@ -491,7 +499,76 @@ def hud(
     box(hud_pos, np.array([128, 15]), np.array([195, 27]), screen)
     # add nearest planet name
     screen.blit(font.render(f"Focus: {nearest_planet.name}",False,green),tuple(hud_pos+np.array([128, 15])+np.array([5,3])))
-    box(hud_pos, np.array([128, 49]), np.array([195, 85]), screen)
+    
+    ## draw the mini orbit with you on it
+    #  0    1     2   3   4  5   6   7   8    9
+    # [e, i_rad, rp, ra, c3, v, alt, a   b   nu]
+    box_pos  = np.array([128, 49])
+    box_size = np.array([195, 85])
+    box(hud_pos, box_pos, box_size, screen)
+    kep_params = keplerian(ship, nearest_planet, G)
+
+    if(kep_params[4] < 0):  # bound orbit only
+        # box geometry
+        top_left = hud_pos + box_pos
+        center_pos = top_left + box_size / 2.0
+
+        # semimajor/minor axes
+        a = float(kep_params[7])
+        b = float(kep_params[8])
+        e = float(kep_params[0])
+        nu = float(kep_params[9])
+
+        # scale to fit orbit inside box
+        pad = np.array([8.0, 8.0])
+        inner_size = box_size - 2*pad
+        s_orbit = min(inner_size[0] / (2.0*a), inner_size[1] / (2.0*b))
+        a_scaled = a * s_orbit
+        b_scaled = b * s_orbit
+
+        # focus offset
+        c = e * a
+        c_scaled = c * s_orbit
+
+        # ellipse top-left for pygame
+        ellipse_rect = (
+            int(center_pos[0] - a_scaled),
+            int(center_pos[1] - b_scaled),
+            int(2.0 * a_scaled),
+            int(2.0 * b_scaled),
+        )
+        pygame.draw.ellipse(screen, red, ellipse_rect, width=1)
+
+        # draw planet at right focus
+        planet_x = center_pos[0] + c_scaled
+        planet_y = center_pos[1]
+        pygame.draw.circle(
+            screen,
+            nearest_planet.graf.color,
+            (int(planet_x), int(planet_y)),
+            nearest_planet.graf.radius * s_orbit
+        )
+
+        # draw periapsis (left side)
+        pe_x = center_pos[0] + a_scaled
+        pe_y = center_pos[1]
+        pygame.draw.circle(screen, (255, 204, 0), (int(pe_x), int(pe_y)), 3, width=1)
+
+        # draw apoapsis (right side)
+        ap_x = center_pos[0] - a_scaled
+        ap_y = center_pos[1]
+        pygame.draw.circle(screen, blue, (int(ap_x), int(ap_y)), 3, width=1)
+
+        # draw current spacecraft position (convert ν -> E for center-param ellipse)
+        E = 2.0 * np.arctan2(np.tan(nu / 2.0), np.sqrt((1.0 + e) / (1.0 - e)))
+        x_orbit = a_scaled * np.cos(E)
+        y_orbit = b_scaled * np.sin(E)
+        ship_dot_x = center_pos[0] + x_orbit
+        ship_dot_y = center_pos[1] - y_orbit  # pygame Y is down!
+        pygame.draw.circle(screen, green, (int(ship_dot_x), int(ship_dot_y)), 3)
+
+    else:
+        screen.blit(font.render(f"Escape Trajectory!",False,red),tuple(hud_pos+np.array([128, 50])+np.array([5,3])))
 
     # draw the orbit stats box
     box(
@@ -503,9 +580,6 @@ def hud(
     )
 
     # fill in stats box
-    #  0    1     2   3   4  5   6
-    # [e, i_rad, rp, ra, c3, v, alt]
-    kep_params = keplerian(ship,nearest_planet,G)
     # build the list of text
     stat_texts = [
         f"v: {kep_params[5]:+.4e}",
@@ -522,7 +596,5 @@ def hud(
     for i in range(len(stat_texts)):
         screen.blit(font_small.render(stat_texts[i],False,blue),(x_orbit_text,y_orbit_text))
         y_orbit_text += 18
-
-    """"""
 
     return pointing_setting
