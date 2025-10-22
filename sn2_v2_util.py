@@ -7,6 +7,7 @@ from fisix import *
 from grafix import *
 from typing import List
 import yaml
+import numpy as np
 
 """
 Classes
@@ -15,6 +16,38 @@ Classes
 # types
 Vec2 = Annotated[NDArray[np.float64], (2,)]
 Vec4 = Annotated[NDArray[np.float64], (4,)]
+
+
+# attitude helpers
+def pointing_quaternion_from_z_axis(z_axis: Vec3, up_reference: Vec3) -> Quat:
+    """Return a quaternion whose body +Z aligns with ``z_axis``."""
+
+    z_axis = np.asarray(z_axis, dtype=float)
+    up_reference = np.asarray(up_reference, dtype=float)
+
+    if np.linalg.norm(z_axis) < 1e-9:
+        raise ValueError("z_axis must be non-zero")
+
+    z_axis = z_axis / np.linalg.norm(z_axis)
+
+    ref = up_reference
+    if np.linalg.norm(ref) < 1e-9:
+        ref = np.array([0.0, 1.0, 0.0])
+    ref = ref / np.linalg.norm(ref)
+
+    x_axis = np.cross(ref, z_axis)
+    if np.linalg.norm(x_axis) < 1e-6:
+        fallback = np.array([1.0, 0.0, 0.0])
+        if np.abs(z_axis[0]) > 0.9:
+            fallback = np.array([0.0, 1.0, 0.0])
+        x_axis = np.cross(fallback, z_axis)
+    x_axis = x_axis / np.linalg.norm(x_axis)
+
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / np.linalg.norm(y_axis)
+
+    dcm = np.column_stack((x_axis, y_axis, z_axis))
+    return dcm2quat(dcm)
 
 
 # planet
@@ -158,7 +191,26 @@ class sn2_spaceship:
 
     def angle_control(self, q_g2b_cmd: Quat):
         # obtain error quaternion
+        # Ensure quaternion sign consistency to avoid 360° error states.
+        # The controller expects the smallest-angle difference between the
+        # commanded and current attitude. Because quaternions q and -q encode
+        # the same physical rotation, a raw command that ends up on the
+        # opposite hemisphere of the current attitude would produce an error
+        # quaternion close to [-1, 0, 0, 0] (i.e. 360°). This collapses the
+        # axis-angle error to zero, preventing the controller from issuing the
+        # needed 180° rotation for retrograde pointing. Align the command
+        # quaternion with the current attitude before computing the error.
+        if np.dot(q_g2b_cmd, self.fiz.q_g2b) < 0:
+            q_g2b_cmd = -q_g2b_cmd
+
         q_err = quatmultiply(q_g2b_cmd, quatinv(self.fiz.q_g2b))
+        # Flip the error quaternion to the positive hemisphere so the
+        # subsequent axis-angle conversion returns the smallest rotation.
+        # Without this, a near-zero error expressed with w < 0 would map to
+        # an angle close to 2π, causing the controller to command a large
+        # rotation in the wrong direction.
+        if q_err[0] < 0:
+            q_err = -q_err
         # obtain axis-angle from error
         axis,angle = quat2axang(q_err)
         
@@ -172,8 +224,6 @@ class sn2_spaceship:
         kp = 5
         ki = 0
         kd = 10
-
-        print("p: ",kp * angle_error," i: ",ki * self.pointing_error_integral," d: ",- kd * self.fiz.ome_g2b)
 
         omega_cmd = kp * angle_error + ki * self.pointing_error_integral - kd * self.fiz.ome_g2b
 
@@ -211,22 +261,14 @@ class sn2_spaceship:
             h = np.cross(r, v)
             h = h / np.linalg.norm(h)
 
-            # triad finishers
-            cross_hr = np.linalg.cross(h, r)
-            cross_hr = cross_hr / np.linalg.norm(cross_hr)
-
-            cross_vh = np.linalg.cross(v, h)
-            cross_vh = cross_vh / np.linalg.norm(cross_vh)
-
-            # prograde
+            q_g2b_cmd = None
             if pointing_setting == 2:
-                dcm_g2pro = np.vstack([h, cross_vh, v])
-                q_g2b_cmd = dcm2quat(dcm_g2pro)
-            # retrograde
-            if pointing_setting == 3:
-                dcm_g2ret = np.vstack([cross_vh, h, -v])
-                q_g2b_cmd = dcm2quat(dcm_g2ret)
-            
+                q_g2b_cmd = pointing_quaternion_from_z_axis(v, h)
+            elif pointing_setting == 3:
+                q_g2b_cmd = pointing_quaternion_from_z_axis(-v, h)
+            else:
+                return
+
             triad(cam,screen,q_g2b_cmd,self.fiz.r_g2p_g)
             self.angle_control(q_g2b_cmd)
 
