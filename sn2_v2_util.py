@@ -204,6 +204,13 @@ class sn2_spaceship:
             q_g2b_cmd = -q_g2b_cmd
 
         q_err = quatmultiply(q_g2b_cmd, quatinv(self.fiz.q_g2b))
+        # Flip the error quaternion to the positive hemisphere so the
+        # subsequent axis-angle conversion returns the smallest rotation.
+        # Without this, a near-zero error expressed with w < 0 would map to
+        # an angle close to 2π, causing the controller to command a large
+        # rotation in the wrong direction.
+        if q_err[0] < 0:
+            q_err = -q_err
         # obtain axis-angle from error
         axis,angle = quat2axang(q_err)
         
