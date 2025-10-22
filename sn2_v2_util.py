@@ -158,6 +158,18 @@ class sn2_spaceship:
 
     def angle_control(self, q_g2b_cmd: Quat):
         # obtain error quaternion
+        # Ensure quaternion sign consistency to avoid 360° error states.
+        # The controller expects the smallest-angle difference between the
+        # commanded and current attitude. Because quaternions q and -q encode
+        # the same physical rotation, a raw command that ends up on the
+        # opposite hemisphere of the current attitude would produce an error
+        # quaternion close to [-1, 0, 0, 0] (i.e. 360°). This collapses the
+        # axis-angle error to zero, preventing the controller from issuing the
+        # needed 180° rotation for retrograde pointing. Align the command
+        # quaternion with the current attitude before computing the error.
+        if np.dot(q_g2b_cmd, self.fiz.q_g2b) < 0:
+            q_g2b_cmd = -q_g2b_cmd
+
         q_err = quatmultiply(q_g2b_cmd, quatinv(self.fiz.q_g2b))
         # obtain axis-angle from error
         axis,angle = quat2axang(q_err)
