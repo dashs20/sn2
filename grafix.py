@@ -195,3 +195,39 @@ def point_g2pg(camera: "grafix_camera", screen: pygame.Surface, r_g2p_g: Vec3):
         return [(0, 0), 0, 0]
 
     return [(int(x_pg), int(y_pg)), sf, 1]
+
+def triad(cam: "grafix_camera", screen: pygame.Surface, q_g2triad, r_g2triad, x_color: Vec3 = np.array([255,0,0]), y_color: Vec3 = np.array([0,255,0]), z_color: Vec3 = np.array([0, 255, 255])):
+    # debug triad
+    x_axis = grafix_line(
+        r1_g2p_g=np.array([0, 0, 0]),
+        r2_g2p_g=np.array([0, 0, 0]),
+        color=tuple(x_color),
+    )
+    y_axis = grafix_line(
+        r1_g2p_g=np.array([0, 0, 0]),
+        r2_g2p_g=np.array([0, 0, 0]),
+        color=tuple(y_color),
+    )
+    z_axis = grafix_line(
+        r1_g2p_g=np.array([0, 0, 0]),
+        r2_g2p_g=np.array([0, 0, 0]),
+        color=tuple(z_color)
+    )
+    x_body_g = (
+        quatrotate(quatinv(q_g2triad), np.array([1, 0, 0])) + r_g2triad
+    )
+    y_body_g = (
+        quatrotate(quatinv(q_g2triad), np.array([0, 1, 0])) + r_g2triad
+    )
+    z_body_g = (
+        quatrotate(quatinv(q_g2triad), np.array([0, 0, 1])) + r_g2triad
+    )
+    x_axis.r2_g2p_g = r_g2triad
+    x_axis.r1_g2p_g = x_body_g
+    x_axis.draw(cam, screen)
+    y_axis.r2_g2p_g = r_g2triad
+    y_axis.r1_g2p_g = y_body_g
+    y_axis.draw(cam, screen)
+    z_axis.r2_g2p_g = r_g2triad
+    z_axis.r1_g2p_g = z_body_g
+    z_axis.draw(cam, screen)

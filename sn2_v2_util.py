@@ -16,6 +16,7 @@ Classes
 Vec2 = Annotated[NDArray[np.float64], (2,)]
 Vec4 = Annotated[NDArray[np.float64], (4,)]
 
+
 # planet
 class sn2_planet:
     def __init__(self, fiz: "fizix_thing", graf: "grafix_sphere", name: str):
@@ -53,6 +54,7 @@ class sn2_spaceship:
         self.main_engine = main_engine
         self.rcs = rcs
 
+        # additional RCS stuff
         # calculate moment matrix (its expensive, so only do it once)
         num_rcs = len(self.rcs.r_b2rcs_b)
         moment_matrix = np.zeros((3, num_rcs))
@@ -60,19 +62,26 @@ class sn2_spaceship:
             moment_matrix[:, i_rcs] = np.linalg.cross(
                 self.rcs.r_b2rcs_b[i_rcs], self.rcs.t_hat_b[i_rcs]
             )
-
         self.pinv_moment_matrix = np.linalg.pinv(moment_matrix)
         self.thruster_forces = np.zeros((num_rcs))
-        self.throttle_pct = 0
 
-    def add_thrusts(self, cmd_moment_pct_b: Vec3, throttle_pct: float):
+        # commanded state
+        self.cmd_throttle_pct_b = 0
+        self.cmd_moment_pct_b = np.array([0, 0, 0])
+
+        # controls stuff
+        self.pointing_error_integral = np.array([0,0,0])
+
+    def add_thrusts(self):
+        # ensure throttle is clipped
+        self.cmd_throttle_pct_b = np.clip(self.cmd_throttle_pct_b, 0, 1)
+
         # convert percent commands to actual commands
-        self.throttle_pct = throttle_pct
-        cmd_moment_b = cmd_moment_pct_b * 2000
-        throttle = throttle_pct * self.main_engine.t_max_n
+        cmd_throttle_b = self.cmd_throttle_pct_b * self.main_engine.t_max_n
+        cmd_moment_b = self.cmd_moment_pct_b * 25000
 
         # add engine thrust
-        self.fiz.force_b = self.fiz.force_b + throttle * self.main_engine.t_hat_b
+        self.fiz.force_b = self.fiz.force_b + cmd_throttle_b * self.main_engine.t_hat_b
 
         # RCS
 
@@ -96,9 +105,9 @@ class sn2_spaceship:
 
     def draw_thrusts(self, cam: "grafix_camera", screen: pygame.Surface):
         # main engine
-        if self.throttle_pct > 0:
+        if self.cmd_throttle_pct_b > 0:
             draw_thruster(
-                throttle_pct=self.throttle_pct,
+                throttle_pct=self.cmd_throttle_pct_b,
                 t_hat_b=self.main_engine.t_hat_b,
                 pos_thruster_b=self.main_engine.r_b2e_b,
                 plume_length=10,
@@ -117,7 +126,7 @@ class sn2_spaceship:
                     throttle_pct=rcs_throttle_pct,
                     t_hat_b=self.rcs.t_hat_b[i],
                     pos_thruster_b=self.rcs.r_b2rcs_b[i],
-                    plume_length=1,
+                    plume_length=3,
                     jitter_factor=1,
                     q_g2b=self.fiz.q_g2b,
                     r_g2b_g=self.fiz.r_g2p_g,
@@ -125,13 +134,107 @@ class sn2_spaceship:
                     screen=screen,
                 )
 
+    def rate_control(self, omega_cmd: Vec3):
+        # generate a moment command, and assign it to the ship's moment.
+
+        # get error
+        omega_err = omega_cmd - self.fiz.ome_g2b
+
+        # TODO: replace this goober logic
+        principal_inertias = np.array(
+            [self.fiz.I[0, 0], self.fiz.I[1, 1], self.fiz.I[2, 2]]
+        )
+        kp = principal_inertias * 5 / 10000
+
+        # construct command
+        cmd = np.clip(omega_err * kp, -1, 1)
+
+        # apply deadband
+        for i in range(len(cmd)):
+            if np.abs(cmd[i]) < 1e-3:
+                cmd[i] = 0
+
+        self.cmd_moment_pct_b = cmd
+
+    def angle_control(self, q_g2b_cmd: Quat):
+        # obtain error quaternion
+        q_err = quatmultiply(q_g2b_cmd, quatinv(self.fiz.q_g2b))
+        # obtain axis-angle from error
+        axis,angle = quat2axang(q_err)
+        
+        # get error, and iterate on error integral
+        angle_error = axis * angle
+        self.pointing_error_integral = self.pointing_error_integral + angle_error * self.fiz.dt
+
+        # enforce saturation (anti wind-up)
+        self.pointing_error_integral = np.clip(self.pointing_error_integral,-np.pi,np.pi)
+        
+        kp = 5
+        ki = 0
+        kd = 10
+
+        print("p: ",kp * angle_error," i: ",ki * self.pointing_error_integral," d: ",- kd * self.fiz.ome_g2b)
+
+        omega_cmd = kp * angle_error + ki * self.pointing_error_integral - kd * self.fiz.ome_g2b
+
+        self.rate_control(omega_cmd)
+
+    def att_ctrl(
+        self,
+        user_cmd_moment_pct_b: Vec3,
+        pointing_setting: int,
+        planet: sn2_planet,
+        cam: "grafix_camera",
+        screen: pygame.Surface,
+    ):
+        # if pointing setting is 0, assign cmd_moment directly
+        if pointing_setting == 0:
+            self.cmd_moment_pct_b = user_cmd_moment_pct_b
+        # if pointing setting is 1...
+        elif pointing_setting == 1:
+            # try to null rate if no moment is commanded.
+            if np.linalg.norm(user_cmd_moment_pct_b) == 0:
+                self.rate_control(np.array([0, 0, 0]))
+            # pass through commmand if moment is provided.
+            else:
+                self.cmd_moment_pct_b = user_cmd_moment_pct_b
+        else:
+            # relative velocity to planet
+            v = self.fiz.v_g2p_g - planet.fiz.v_g2p_g
+            v = v / np.linalg.norm(v)
+
+            # relative position to planet
+            r = self.fiz.r_g2p_g - planet.fiz.r_g2p_g
+            r = r / np.linalg.norm(r)
+
+            # orbit angular momentum vector
+            h = np.cross(r, v)
+            h = h / np.linalg.norm(h)
+
+            # triad finishers
+            cross_hr = np.linalg.cross(h, r)
+            cross_hr = cross_hr / np.linalg.norm(cross_hr)
+
+            cross_vh = np.linalg.cross(v, h)
+            cross_vh = cross_vh / np.linalg.norm(cross_vh)
+
+            # prograde
+            if pointing_setting == 2:
+                dcm_g2pro = np.vstack([h, cross_vh, v])
+                q_g2b_cmd = dcm2quat(dcm_g2pro)
+            # retrograde
+            if pointing_setting == 3:
+                dcm_g2ret = np.vstack([cross_vh, h, -v])
+                q_g2b_cmd = dcm2quat(dcm_g2ret)
+            
+            triad(cam,screen,q_g2b_cmd,self.fiz.r_g2p_g)
+            self.angle_control(q_g2b_cmd)
+
 
 # little userInput class
 class sn2_userInput:
-    def __init__(
-        self, throttle_pct: float, cmd_moment_pct_b: Vec3
-    ):
-        self.throttle_pct = throttle_pct
+    def __init__(self, throttle_increment: float, cmd_moment_pct_b: Vec3):
+        self.throttle_increment = throttle_increment
         self.cmd_moment_pct_b = cmd_moment_pct_b
 
 
@@ -267,7 +370,7 @@ def make_stars(NUM_STARS: float, STAR_DISTANCE: float):
 
 
 # get user input
-def getKeyInput(throttle_pct: float):
+def getKeyInput():
     # get state of keyb
     keys = pygame.key.get_pressed()
 
@@ -287,14 +390,14 @@ def getKeyInput(throttle_pct: float):
         cmd_moment_pct_b[2] = 1
 
     # handle throttle
+    throttle_increment = 0
     if keys[pygame.K_LSHIFT]:
-        throttle_pct += 1 / 100
+        throttle_increment = 1 / 100
     if keys[pygame.K_LCTRL]:
-        throttle_pct -= 1 / 100
-    throttle_pct = np.clip(throttle_pct, 0, 1)
+        throttle_increment = -1 / 100
 
     return sn2_userInput(
-        throttle_pct=throttle_pct,
+        throttle_increment=throttle_increment,
         cmd_moment_pct_b=cmd_moment_pct_b,
     )
 
@@ -353,13 +456,13 @@ def keplerian(ship: sn2_spaceship, planet: sn2_planet, G: float):
     h = np.linalg.norm(H)
     r_hat = R / r
     E = np.cross(V, H) / mu - r_hat  # eccentricity vector
-    epsilon = v**2 / 2 - mu / r      # specific orbital energy
+    epsilon = v**2 / 2 - mu / r  # specific orbital energy
 
     # orbital elements
-    e = np.linalg.norm(E)                          # eccentricity
-    i_rad = np.arccos(H[2] / h)                    # inclination
+    e = np.linalg.norm(E)  # eccentricity
+    i_rad = np.arccos(H[2] / h)  # inclination
     a = -mu / (2 * epsilon) if epsilon != 0 else np.inf  # semi-major axis
-    b = a * np.sqrt(1 - e**2) if e < 1 else np.nan       # semiminor axis
+    b = a * np.sqrt(1 - e**2) if e < 1 else np.nan  # semiminor axis
 
     # periapsis & apoapsis
     if e < 1:
@@ -375,9 +478,8 @@ def keplerian(ship: sn2_spaceship, planet: sn2_planet, G: float):
     sin_nu = np.dot(R, V) / (e * h)  # <-- FIX
     nu = np.arctan2(sin_nu, cos_nu)
 
-
-    c3 = 2 * epsilon                 # characteristic energy
-    alt = r - planet.graf.radius     # altitude
+    c3 = 2 * epsilon  # characteristic energy
+    alt = r - planet.graf.radius  # altitude
 
     return [e, i_rad, rp, ra, c3, v, alt, a, b, nu]
 
@@ -391,7 +493,7 @@ def hud(
     click_array: Vec3,
     font: pygame.font.Font,
     font_small: pygame.font.Font,
-    G: float
+    G: float,
 ):
     red = np.array([255, 0, 89])
     green = np.array([0, 255, 0])
@@ -400,22 +502,22 @@ def hud(
     """pointer box definition and click checking"""
     # define names of settings
     box_texts = [
-        "OFF", # 0
-        "SAS", # 1
-        "PRO", # 2
-        "RET", # 3
-        "R-IN", # 4
-        "R-OUT", # 5
-        "+H", #6
-        "-H", # 7
+        "OFF",  # 0
+        "SAS",  # 1
+        "PRO",  # 2
+        "RET",  # 3
+        "R-IN",  # 4
+        "R-OUT",  # 5
+        "+H",  # 6
+        "-H",  # 7
     ]
 
     # define setting colors
     box_text_colors = [
-        (255,255,255),
-        (255,255,255),
-        (0,255,0),
-        (0,255,0),
+        (255, 255, 255),
+        (255, 255, 255),
+        (0, 255, 0),
+        (0, 255, 0),
         (52, 171, 235),
         (52, 171, 235),
         (177, 52, 235),
@@ -486,7 +588,10 @@ def hud(
             )
         else:
             box(hud_pos, box_positions[i], box_size, screen)
-        screen.blit(font.render(box_texts[i],False,box_text_colors[i]),tuple(hud_pos+box_positions[i]+np.array([3,3])))
+        screen.blit(
+            font.render(box_texts[i], False, box_text_colors[i]),
+            tuple(hud_pos + box_positions[i] + np.array([3, 3])),
+        )
 
     # draw the orbit vis box
     box(
@@ -498,17 +603,20 @@ def hud(
     )
     box(hud_pos, np.array([128, 15]), np.array([195, 27]), screen)
     # add nearest planet name
-    screen.blit(font.render(f"Focus: {nearest_planet.name}",False,green),tuple(hud_pos+np.array([128, 15])+np.array([5,3])))
-    
+    screen.blit(
+        font.render(f"Focus: {nearest_planet.name}", False, green),
+        tuple(hud_pos + np.array([128, 15]) + np.array([5, 3])),
+    )
+
     ## draw the mini orbit with you on it
     #  0    1     2   3   4  5   6   7   8    9
     # [e, i_rad, rp, ra, c3, v, alt, a   b   nu]
-    box_pos  = np.array([128, 49])
+    box_pos = np.array([128, 49])
     box_size = np.array([195, 85])
     box(hud_pos, box_pos, box_size, screen)
     kep_params = keplerian(ship, nearest_planet, G)
 
-    if(kep_params[4] < 0):  # bound orbit only
+    if kep_params[4] < 0:  # bound orbit only
         # box geometry
         top_left = hud_pos + box_pos
         center_pos = top_left + box_size / 2.0
@@ -521,8 +629,8 @@ def hud(
 
         # scale to fit orbit inside box
         pad = np.array([8.0, 8.0])
-        inner_size = box_size - 2*pad
-        s_orbit = min(inner_size[0] / (2.0*a), inner_size[1] / (2.0*b))
+        inner_size = box_size - 2 * pad
+        s_orbit = min(inner_size[0] / (2.0 * a), inner_size[1] / (2.0 * b))
         a_scaled = a * s_orbit
         b_scaled = b * s_orbit
 
@@ -546,7 +654,7 @@ def hud(
             screen,
             nearest_planet.graf.color,
             (int(planet_x), int(planet_y)),
-            nearest_planet.graf.radius * s_orbit
+            nearest_planet.graf.radius * s_orbit,
         )
 
         # draw periapsis (left side)
@@ -568,7 +676,10 @@ def hud(
         pygame.draw.circle(screen, green, (int(ship_dot_x), int(ship_dot_y)), 3)
 
     else:
-        screen.blit(font.render(f"Escape Trajectory!",False,red),tuple(hud_pos+np.array([128, 50])+np.array([5,3])))
+        screen.blit(
+            font.render(f"Escape Trajectory!", False, red),
+            tuple(hud_pos + np.array([128, 50]) + np.array([5, 3])),
+        )
 
     # draw the orbit stats box
     box(
@@ -594,7 +705,9 @@ def hud(
     x_orbit_text = hud_pos[0] + 345
     y_orbit_text = hud_pos[1] + 12
     for i in range(len(stat_texts)):
-        screen.blit(font_small.render(stat_texts[i],False,blue),(x_orbit_text,y_orbit_text))
+        screen.blit(
+            font_small.render(stat_texts[i], False, blue), (x_orbit_text, y_orbit_text)
+        )
         y_orbit_text += 18
 
     return pointing_setting

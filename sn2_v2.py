@@ -18,23 +18,6 @@ pygame.font.init()
 font = pygame.font.Font("7seg.ttf", 14)
 font_small = pygame.font.Font("7seg.ttf", 12)
 
-# debug triad
-x_axis = grafix_line(
-    r1_g2p_g=np.array([0, 0, 0]),
-    r2_g2p_g=np.array([0, 0, 0]),
-    color=pygame.Color("red"),
-)
-y_axis = grafix_line(
-    r1_g2p_g=np.array([0, 0, 0]),
-    r2_g2p_g=np.array([0, 0, 0]),
-    color=pygame.Color("green"),
-)
-z_axis = grafix_line(
-    r1_g2p_g=np.array([0, 0, 0]),
-    r2_g2p_g=np.array([0, 0, 0]),
-    color=pygame.Color("cyan"),
-)
-
 # make planets, ship, stars
 planets = import_planets("planets.yaml", dt_g)
 
@@ -53,6 +36,7 @@ cam = grafix_camera(
 cam_dist = -30
 cam_az = 21.70
 cam_el = 156.72
+cam_setting = 1
 panning = False
 sensitivity = 0.003
 
@@ -84,7 +68,7 @@ while running:
 
         # mouse wheel
         if event.type == pygame.MOUSEWHEEL:
-            cam_dist -= event.y*5
+            cam_dist += event.y * 5
 
         if panning:
             mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -97,12 +81,37 @@ while running:
             # Reset start point to current so it becomes relative movement each frame
             mouse_start_pos = (mouse_x, mouse_y)
 
+        # Detect key release
+        if event.type == pygame.KEYUP:
+            if event.key == pygame.K_c:
+                cam_setting *= -1  # toggle between +1 and -1
+
     t += dt_g
 
+    # sort planets by distance (it's useful in a few places)
+    planet_dists = []
+    planet_inds = []
+    for cur_planet in range(len(planets)):
+        planet_dists.append(
+            np.linalg.norm(planets[cur_planet].fiz.r_g2p_g - cam.r_g2c_g)
+        )
+        planet_inds.append(cur_planet)
+
+    # Sort together by values in a
+    planet_dists_sorted, planet_inds_sorted = zip(
+        *sorted(zip(planet_dists, planet_inds), reverse=True)
+    )
+    planet_inds_sorted = list(planet_inds_sorted)
+    nearest_planet = planets[planet_inds_sorted[-1]]
+
     # get user input
-    user = getKeyInput(throttle_pct)
-    throttle_pct = user.throttle_pct
-    cmd_moment_pct_b = user.cmd_moment_pct_b
+    user = getKeyInput()
+
+    # assign ship throttle
+    ship.cmd_throttle_pct_b += user.throttle_increment
+
+    # assign ship pointing
+    # ship.att_ctrl(user.cmd_moment_pct_b, pointing_setting, nearest_planet, cam, screen)
 
     """Physics"""
 
@@ -145,7 +154,7 @@ while running:
     ship.fiz.force_b = quatrotate(ship.fiz.q_g2b, f_grav_g)
 
     # update thruster forces on the ship
-    ship.add_thrusts(cmd_moment_pct_b, throttle_pct)
+    ship.add_thrusts()
 
     # step each planet. also update its graphics state.
     for cur_planet in range(len(planets)):
@@ -163,7 +172,12 @@ while running:
     q_az = axisquat("y", cam_az)
     q_el = axisquat("x", cam_el)
     q_b2c = quatmultiply(q_az, q_el)
-    q_g2c = quatmultiply(ship.fiz.q_g2b, q_b2c)
+    if cam_setting > 0:
+        q_g2c = quatmultiply(ship.fiz.q_g2b, q_b2c)
+    else:
+        # if you somehow manage to switch modes before the 1st loop, this will crash the game
+        q_g2c = quatmultiply(nearest_planet.fiz.q_g2b, q_b2c)
+
     # position
     r_c2b_c = np.array([0, 0, cam_dist])
     r_c2b_g = quatrotate(quatinv(q_g2c), r_c2b_c)
@@ -178,21 +192,7 @@ while running:
     for star in stars:
         star.draw(cam, screen)
 
-    # for the planets, we need to figure out how far they are from the camera and draw them in that order.
-    planet_dists = []
-    planet_inds = []
-    for cur_planet in range(len(planets)):
-        planet_dists.append(
-            np.linalg.norm(planets[cur_planet].fiz.r_g2p_g - cam.r_g2c_g)
-        )
-        planet_inds.append(cur_planet)
-
-    # Sort together by values in a
-    planet_dists_sorted, planet_inds_sorted = zip(
-        *sorted(zip(planet_dists, planet_inds), reverse=True)
-    )
-    planet_inds_sorted = list(planet_inds_sorted)
-
+    # draw planets from far to near
     for i in range(len(planets)):
         planets[planet_inds_sorted[i]].graf.draw(cam, screen)
 
@@ -201,30 +201,13 @@ while running:
     ship.draw_thrusts(cam, screen)
 
     # debug triad
-    x_body_g = (
-        quatrotate(quatinv(ship.fiz.q_g2b), np.array([1, 0, 0])) + ship.fiz.r_g2p_g
-    )
-    y_body_g = (
-        quatrotate(quatinv(ship.fiz.q_g2b), np.array([0, 1, 0])) + ship.fiz.r_g2p_g
-    )
-    z_body_g = (
-        quatrotate(quatinv(ship.fiz.q_g2b), np.array([0, 0, 1])) + ship.fiz.r_g2p_g
-    )
-    x_axis.r2_g2p_g = ship.fiz.r_g2p_g
-    x_axis.r1_g2p_g = x_body_g
-    x_axis.draw(cam, screen)
-    y_axis.r2_g2p_g = ship.fiz.r_g2p_g
-    y_axis.r1_g2p_g = y_body_g
-    y_axis.draw(cam, screen)
-    z_axis.r2_g2p_g = ship.fiz.r_g2p_g
-    z_axis.r1_g2p_g = z_body_g
-    z_axis.draw(cam, screen)
+    triad(cam,screen,ship.fiz.q_g2b,ship.fiz.r_g2p_g)
 
     # hud
     pointing_setting = hud(
         np.array([375, screen_y - 160]),
         ship,
-        planets[planet_inds_sorted[-1]],
+        nearest_planet,
         pointing_setting,
         screen,
         left_click_array,
@@ -232,6 +215,8 @@ while running:
         font_small,
         G,
     )
+
+    ship.att_ctrl(user.cmd_moment_pct_b, pointing_setting, nearest_planet, cam, screen)
 
     # LAST
     pygame.display.flip()
